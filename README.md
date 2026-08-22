@@ -81,8 +81,6 @@ AI 创作者社区冷启动阶段，运营者每周被困在三件事里：
 
 ## 实习生工作台
 
-[体验火花工坊实习生工作台（飞书 Base App）](https://dcniaqwtmoca.feishuapp.com/app/app_17cef9xm88c)
-
 ![实习生工作台](images/huohua-worktable-preview.png)
 
 担任 Mentor 管理实习生时发现「落表」每天花 30 分钟，用飞书 Base App 搭建工作台把流程砍到最短：
