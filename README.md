@@ -26,6 +26,7 @@ Demo 演示「数据 → 画像 → 话术 → 写回」的中间产物链路。
 - [评测体系](#评测体系)
 - [失败案例与迭代](#失败案例与迭代)
 - [关键产品决策](#关键产品决策)
+- [脱离 Dify 的核心逻辑说明](#脱离-dify-的核心逻辑说明)
 - [项目反思](#项目反思)
 
 ## 业务背景
@@ -220,6 +221,103 @@ AI 创作者社区冷启动阶段，运营者每周被困在三件事里：
 | 输出格式 | JSON 死锁 | 自由文本无法可靠解析写回飞书字段 |
 | 日报漫画 | 单张横向编辑漫画 | 四宫格信息分散，用户理解成本高 |
 | 成长值激励 | 奖励「有用」（下载/Fork） | 奖励「认同」（点赞）容易刷分，且不反映真实价值 |
+
+## 脱离 Dify 的核心逻辑说明
+
+> 面试官常问："这个项目用了 Dify，脱离 Dify 你能实现吗？"
+>
+> 答案是：**能。而且这个项目里已经有两个子项目完全不依赖 Dify。**
+
+### 四个子项目的技术依赖分析
+
+| 子项目 | 是否依赖 Dify | 脱离 Dify 的实现方式 |
+|--------|-------------|---------------------|
+| 子项目一：AI 运营平台 | 是（Dify Workflow） | 用 Python + 定时任务 + LLM API 重写，核心逻辑不变 |
+| 子项目二：RAG 问答机器人 | 部分（阶段一用 Dify，阶段二已脱离） | **阶段二已经是纯 Python + 微信公众号 API**，Dify 只是验证阶段的快速原型 |
+| 子项目三：实习生工作台 | 否 | **完全基于飞书 Base App**，和 Dify 无关 |
+| 子项目四：AI 日报工作流 | 部分（Dify Workflow + Python Bot） | Dify 部分可用 Python 定时任务重写，**微信 Bot 已经是纯 Python** |
+
+### 子项目一（AI 运营平台）脱离 Dify 的核心逻辑
+
+整个周复盘自动化可以拆解为 3 个步骤，每个步骤都不依赖 Dify：
+
+```
+输入：本周投放数据（飞书多维表格）+ 用户访谈记录
+  ↓
+Step 1: 数据汇总（纯代码）
+  → 从飞书多维表格 API 读取本周数据
+  → 按用户分群、渠道、内容类型聚合
+  → 输出：结构化数据 JSON
+  ↓
+Step 2: 画像生成（LLM API 调用）
+  → 把结构化数据 + 访谈原话喂给 LLM
+  → 系统提示词定义 9 段式画像模板（用户构成/核心痛点/行为特征/内容偏好/...）
+  → 要求每个痛点必须附访谈原话作证据
+  → 输出：9 段式群体画像 Markdown
+  ↓
+Step 3: 话术生成（LLM API 调用 + JSON 解析）
+  → 把画像喂给 LLM，系统提示词定义 3 种风格（正式/亲切/活泼）
+  → 强制 JSON 输出：{"style_1": "...", "style_2": "...", "style_3": "..."}
+  → 解析 JSON，通过飞书 API 写入文案库多维表格
+  ↓
+输出：群体画像 + 3 条话术 + 自动写回飞书
+```
+
+**用伪代码实现：**
+
+```python
+def weekly_review_workflow(week_start, week_end):
+    # Step 1: 数据汇总（飞书 API）
+    data = feishu_bitable.read(
+        app_id=APP_ID,
+        table_id="投放数据表",
+        filter=f"日期 >= {week_start} AND 日期 <= {week_end}"
+    )
+    aggregated = aggregate_by_segment(data)  # 纯 Python 聚合
+    
+    # Step 2: 画像生成（LLM API）
+    interviews = feishu_bitable.read(table_id="访谈记录表")
+    persona = llm.chat(
+        system_prompt=PERSONA_PROMPT,  # 9 段式模板 + 证据约束
+        user_input=f"数据：{aggregated}\n访谈：{interviews}"
+    )
+    
+    # Step 3: 话术生成（LLM API + JSON 死锁）
+    scripts = llm.chat(
+        system_prompt=SCRIPT_PROMPT,  # 3 种风格 + JSON 输出格式
+        user_input=f"画像：{persona}",
+        response_format="json_object"  # 强制 JSON 输出
+    )
+    scripts = json.loads(scripts)
+    
+    # 自动写回飞书
+    for style, text in scripts.items():
+        feishu_bitable.append(table_id="文案库", fields={"风格": style, "文案": text})
+    
+    return {"persona": persona, "scripts": scripts}
+```
+
+**Dify 做了什么、没做什么：**
+
+| Dify 提供的 | 核心逻辑（不依赖 Dify） |
+|------------|----------------------|
+| Workflow 可视化编排 | 9 段式画像模板和证据约束（系统提示词设计） |
+| HTTP 节点调用飞书 API | 飞书 API 调用和数据聚合逻辑 |
+| Code 节点处理 JSON | JSON 死锁输出和解析（`json.dumps` 解决转义） |
+| 定时触发 | 用 Python `schedule` 或 cron 替代 |
+| 日志和监控 | 用飞书多维表格或简单日志替代 |
+
+**结论**：Dify 让我在实习的有限时间里快速验证了这个工作流（从 0 到 1 只用了 3 天），但所有有价值的产品决策——画像模板怎么设计、话术风格怎么定义、JSON 怎么死锁、数据怎么聚合——都是我自己设计的，和 Dify 无关。换成纯 Python，核心逻辑一行都不用改。
+
+### 子项目二已经脱离 Dify
+
+值得强调的是，**子项目二（RAG 问答机器人）的阶段二已经完全脱离了 Dify**：
+
+- 阶段一用 Dify Chatflow 快速验证（1 天搭完）
+- 验证可行后，阶段二用纯 Python + 微信公众号 API 重写，接入 528 张课件 OCR
+- 检索匹配率从 5/15 优化到 15/15，核心是**分块策略和同义词映射**，和 Dify 无关
+
+这说明：Dify 是快速验证的工具，但真正上线的产品需要脱离低代码平台，用代码实现更精细的控制。
 
 ## 项目反思
 
